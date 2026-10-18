@@ -1,13 +1,61 @@
 {
   "sources": [
-    {"provider": "greenhouse", "board": "anthropic", "company": "Anthropic", "enabled": true},
-    {"provider": "ashby", "board": "openai", "company": "OpenAI", "enabled": true},
-    {"provider": "lever", "board": "YOUR_CONFIRMED_EMPLOYER_BOARD", "company": "Confirm against employer careers website", "enabled": false}
+    {
+      "provider": "greenhouse",
+      "board": "anthropic",
+      "company": "Anthropic",
+      "enabled": true
+    },
+    {
+      "provider": "ashby",
+      "board": "openai",
+      "company": "OpenAI",
+      "enabled": true
+    },
+    {
+      "provider": "lever",
+      "board": "YOUR_CONFIRMED_EMPLOYER_BOARD",
+      "company": "Confirm against employer careers website",
+      "enabled": false
+    },
+    {
+      "provider": "greenhouse",
+      "board": "adyen",
+      "company": "Adyen",
+      "enabled": true
+    },
+    {
+      "provider": "lever",
+      "board": "farfetch",
+      "company": "Farfetch",
+      "enabled": true
+    }
   ],
   "criteria": {
-    "role_keywords": ["legal", "counsel", "lawyer", "attorney", "privacy", "compliance", "regulatory", "governance", "policy"],
+    "role_keywords": [
+      "legal",
+      "counsel",
+      "lawyer",
+      "attorney",
+      "privacy",
+      "compliance",
+      "regulatory",
+      "governance",
+      "policy"
+    ],
     "exclude_title_keywords": [],
-    "language_keywords": ["Korean", "English", "Mandarin", "Chinese", "bilingual", "multilingual", "한국어", "영어", "韩语", "英语"],
+    "language_keywords": [
+      "Korean",
+      "English",
+      "Mandarin",
+      "Chinese",
+      "bilingual",
+      "multilingual",
+      "한국어",
+      "영어",
+      "韩语",
+      "英语"
+    ],
     "require_language_match": false,
     "preferred_locations": [],
     "maximum_required_experience_years": 4,

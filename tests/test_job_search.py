@@ -123,6 +123,21 @@ class EligibilityTests(unittest.TestCase):
         self.assertEqual(js.experience_evidence("10+ years of transactional IP experience")[0], 10)
         self.assertEqual(js.experience_evidence("At least 12 years of litigation experience")[0], 12)
 
+    def test_actual_airwallex_nonbreaking_hyphen_pqe_phrases(self):
+        regulatory = "Qualified lawyer with around 6–8 years of relevant post‑qualification experience"
+        product = "5-10 years of post‑qualification experience"
+        self.assertEqual(js.experience_evidence(regulatory), (6, ["6–8 years of relevant post‑qualification experience"]))
+        self.assertEqual(js.experience_evidence(product), (5, [product]))
+        self.assertEqual(classify(item=posting(description=regulatory))["status"], "excluded_pqe")
+        self.assertEqual(classify(item=posting(description=product))["status"], "excluded_pqe")
+
+    def test_unicode_hyphens_and_ranges_keep_lower_bound(self):
+        for hyphen in "-‐‑‒–—―−﹘﹣－":
+            with self.subTest(hyphen=hyphen):
+                text = f"5{hyphen}10 years of post{hyphen}qualification experience"
+                self.assertEqual(js.experience_evidence(text), (5, [text]))
+        self.assertEqual(js.experience_evidence("3 years of relevant PQE")[0], 3)
+
     def test_missing_experience_needs_review_unless_compatibility_verified(self):
         self.assertEqual(classify(item=posting(description="Legal research and Korean contract drafting."))["status"], "needs_verification")
 

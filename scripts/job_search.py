@@ -26,10 +26,11 @@ API_HOSTS = {"boards-api.greenhouse.io", "api.lever.co", "api.ashbyhq.com"}
 ROLE_WORDS = ("legal", "counsel", "lawyer", "attorney", "privacy", "compliance", "regulatory", "governance", "policy", "法务", "合规", "法律")
 LANGUAGE_WORDS = ("korean", "english", "mandarin", "chinese", "bilingual", "multilingual", "한국어", "영어", "韩语", "英语", "韩文")
 AI_WORDS = ("AI", "artificial intelligence", "machine learning", "generative AI", "LLM", "人工智能")
+HYPHEN_TABLE = str.maketrans({character: "-" for character in "‐‑‒–—―−﹘﹣－"})
 EXPERIENCE_RE = re.compile(
     r"(?P<minimum>\d+(?:\.\d+)?)\s*(?:[-–]\s*\d+(?:\.\d+)?)?\s*(?:\+|or more)?\s*"
     r"(?:years?|yrs?)[’']?\s*(?:of\s+)?(?:"
-    r"(?:post[-\s]qualifi(?:cation|ed)|PQE)(?:\s+experience)?|"
+    r"(?:relevant\s+)?(?:post[-\s]qualifi(?:cation|ed)|PQE)(?:\s+experience)?|"
     r"(?:(?:relevant|employment|corporate|commercial|privacy|data|protection|and|compliance|in[-\s]house|professional|legal|law|firm|regulatory|policy|related|work|litigation|transactional|IP|operations|technology|technical)\s+){0,8}experience|"
     r"practi[sc]ing\s+law|(?:as\s+an?\s+|in\s+)(?:lawyer|attorney|counsel|legal))", re.IGNORECASE
 )
@@ -182,14 +183,17 @@ def deduplicate(jobs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def experience_evidence(description: str) -> tuple[float | None, list[str]]:
     matches = []
-    for match in EXPERIENCE_RE.finditer(description):
+    # Unicode range dashes and nonbreaking hyphens are common in actual ads.
+    # One-character replacements preserve offsets into the original evidence.
+    normalized = description.translate(HYPHEN_TABLE)
+    for match in EXPERIENCE_RE.finditer(normalized):
         prefix = description[max(0, match.start() - 18):match.start()].casefold()
         if re.search(r"(?:up to|less than|at most|fewer than)\s*$", prefix):
             continue
         matches.append(match)
     if not matches:
         return None, []
-    return max(float(match.group("minimum")) for match in matches), [match.group(0) for match in matches]
+    return max(float(match.group("minimum")) for match in matches), [description[match.start():match.end()] for match in matches]
 
 
 def mainland_location(location: str) -> bool:
