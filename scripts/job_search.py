@@ -224,6 +224,31 @@ def numeric(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
 
 
+def posting_recency(published_at: Any, fetched_at: str) -> dict[str, Any]:
+    """Use only a provider's posting timestamp, never update/first-seen dates."""
+    unknown = {"published_at_normalized": None, "posted_age_days": "unknown", "recency_bucket": "unknown"}
+    try:
+        if numeric(published_at):
+            # Lever documents createdAt as milliseconds since the Unix epoch.
+            timestamp = published_at / 1000 if published_at >= 100_000_000_000 else published_at
+            published = datetime.fromtimestamp(timestamp, UTC)
+        elif isinstance(published_at, str):
+            published = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
+            if published.tzinfo is None:
+                return unknown
+        else:
+            return unknown
+        fetched = datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+        elapsed = (fetched - published).total_seconds()
+        if elapsed < 0:
+            return unknown
+        bucket = "last_3_days" if elapsed <= 3 * 86400 else ("last_7_days" if elapsed <= 7 * 86400 else "older")
+        return {"published_at_normalized": published.astimezone(UTC).isoformat(timespec="seconds"),
+                "posted_age_days": round(elapsed / 86400, 3), "recency_bucket": bucket}
+    except (OverflowError, OSError, TypeError, ValueError):
+        return unknown
+
+
 def classify(job: dict[str, Any], criteria: dict[str, Any], verified_facts: dict[str, Any]) -> dict[str, Any]:
     title, description = job["title"], job["description"]
     role_matches = words_in(title, criteria.get("role_keywords", list(ROLE_WORDS)))
@@ -241,6 +266,9 @@ def classify(job: dict[str, Any], criteria: dict[str, Any], verified_facts: dict
     bonus = verified_value(facts, "guaranteed_bonus_months", job["fetched_at"], age)
     qualified = verified_value(facts, "qualification_compatible", job["fetched_at"], age)
     permit = verified_value(facts, "work_permit_support", job["fetched_at"], age)
+    # No provider adapter supplies a current "actively reviewing" hiring badge.
+    # Only explicit human-verified evidence from the past 24 hours can assert it.
+    reviewing = verified_value(facts, "actively_reviewing", job["fetched_at"], 1)
     outside_mainland = not mainland_location(job["location"])
     permit_required = bool(criteria.get("require_work_permit_outside_mainland_china", True)) and outside_mainland
     salary_floor = criteria.get("monthly_net_floor_cny")
@@ -290,7 +318,10 @@ def classify(job: dict[str, Any], criteria: dict[str, Any], verified_facts: dict
         status, reasons = "needs_verification", missing
     else:
         status, reasons = "ready_for_review", ["configured gates have dated verification; review the live vacancy before applying"]
-    return {**job, "status": status, "reasons": reasons, "unknowns": missing, "contextual_unknowns": contextual_unknowns,
+    return {**job, **posting_recency(job.get("published_at"), job["fetched_at"]),
+            "status": status, "reasons": reasons, "unknowns": missing, "contextual_unknowns": contextual_unknowns,
+            "actively_reviewing": reviewing if isinstance(reviewing, bool) else "unknown",
+            "actively_reviewing_evidence": facts.get("actively_reviewing") if isinstance(reviewing, bool) else None,
             "role_matches": role_matches, "language_matches": languages, "ai_matches": ai_matches,
             "excluded_title_matches": excluded_title_matches,
             "preferred_location_matches": location_matches, "minimum_experience_years": pqe_min,
@@ -345,7 +376,10 @@ def collect(config: dict[str, Any], fetcher=fetch_json, fetched_at: str | None =
     unique_jobs = deduplicate(jobs)
     classified = [classify(job, config.get("criteria", {}), config.get("verified_facts", {})) for job in unique_jobs]
     order = {"ready_for_review": 0, "needs_verification": 1, "stretch_pqe": 2}
-    classified.sort(key=lambda job: (order.get(job["status"], 3), -job["score"], job["company"].casefold(), job["title"].casefold(), job["job_id"]))
+    recency_order = {"last_3_days": 0, "last_7_days": 1, "older": 2, "unknown": 3}
+    classified.sort(key=lambda job: (job["status"].startswith("excluded_"), recency_order[job["recency_bucket"]],
+                                    job["actively_reviewing"] is not True, order.get(job["status"], 3),
+                                    -job["score"], job["company"].casefold(), job["title"].casefold(), job["job_id"]))
     counts: dict[str, int] = {}
     for job in classified:
         counts[job["status"]] = counts.get(job["status"], 0) + 1
@@ -384,7 +418,7 @@ def save_outputs(report: dict[str, Any], output_dir: Path, state_path: Path) -> 
         state_path.parent.mkdir(parents=True, exist_ok=True)
         state_path.write_text(json.dumps(previous, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     (output_dir / "jobs.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    fields = ["job_id", "company", "title", "location", "workplace_type", "status", "reasons", "unknowns", "contextual_unknowns", "score", "is_new", "first_seen_at", "fetched_at", "source_url", "source_api_url", "published_at", "updated_at", "minimum_experience_years", "experience_evidence", "monthly_net_cny", "guaranteed_bonus_months", "work_permit_support", "qualification_compatible", "language_matches", "ai_matches", "source_ids"]
+    fields = ["job_id", "company", "title", "location", "workplace_type", "status", "reasons", "unknowns", "contextual_unknowns", "score", "is_new", "first_seen_at", "fetched_at", "source_url", "source_api_url", "published_at", "published_at_normalized", "posted_age_days", "recency_bucket", "actively_reviewing", "actively_reviewing_evidence", "updated_at", "minimum_experience_years", "experience_evidence", "monthly_net_cny", "guaranteed_bonus_months", "work_permit_support", "qualification_compatible", "language_matches", "ai_matches", "source_ids"]
     with (output_dir / "jobs.csv").open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
@@ -392,15 +426,16 @@ def save_outputs(report: dict[str, Any], output_dir: Path, state_path: Path) -> 
     lines = ["# Daily public job discovery", "", f"Fetched: {report['fetched_at']}", "",
              f"Run status: **{report['run_status']}**. Successful sources: {report['successful_sources']}; failed sources: {report['failed_sources']}.", "",
              "Open postings are discovery leads. Unknown required compensation, work permit support, or qualification compatibility prevents readiness. Bonus is contextual unless explicitly configured as mandatory. No applications were submitted.", "",
+             "Review leads prioritize postings from the last 3 days, then the last 7 days, then older postings; unknown posting dates come last. Updated and first-seen dates do not establish freshness. Actively reviewing stays unknown unless explicitly verified in the past 24 hours.", "",
              f"Current unique postings: {len(report['jobs'])}; duplicates removed: {report['duplicate_jobs']}.", "",
              "## Source evidence", "", "| Board | Status | Jobs | Evidence |", "| --- | --- | ---: | --- |"]
     for source in report["sources"]:
         detail = source.get("error", source["status"])
         lines.append(f"| {markdown(source['provider'] + ':' + source['board'])} | {markdown(detail)} | {source['jobs_fetched']} | {source['source_url']} |")
-    lines += ["", "## Review queue", "", "| Company / role | Location | Status | Unknowns / reasons | Source |", "| --- | --- | --- | --- | --- |"]
+    lines += ["", "## Review queue", "", "| Company / role | Location | Posting recency | Actively reviewing | Status | Unknowns / reasons | Source |", "| --- | --- | --- | --- | --- | --- | --- |"]
     queue = [job for job in report["jobs"] if not job["status"].startswith("excluded_")]
     for job in queue[:100]:
-        lines.append(f"| {markdown(job['company'] + ' / ' + job['title'])} | {markdown(job['location'])} | {job['status']} | {markdown('; '.join(job['unknowns'] or job['reasons']))} | {job['source_url']} |")
+        lines.append(f"| {markdown(job['company'] + ' / ' + job['title'])} | {markdown(job['location'])} | {job['recency_bucket']} | {job['actively_reviewing']} | {job['status']} | {markdown('; '.join(job['unknowns'] or job['reasons']))} | {job['source_url']} |")
     if not queue:
         lines += ["", "No review leads were produced from successfully fetched boards." if report["successful_sources"] else "Discovery failed: no board was fetched successfully. This is not a zero-match result."]
     if len(queue) > 100:

@@ -41,9 +41,29 @@
       "compliance",
       "regulatory",
       "governance",
-      "policy"
+      "policy",
+      "hiring associate",
+      "hiring coordinator",
+      "recruiting coordinator",
+      "recruitment coordinator",
+      "recruiting operations",
+      "recruitment operations",
+      "legal operations",
+      "legal ops",
+      "AI operations",
+      "research operations coordinator"
     ],
-    "exclude_title_keywords": [],
+    "exclude_title_keywords": [
+      "engineer",
+      "scientist",
+      "architect",
+      "tax director",
+      "head of accounting",
+      "accounting policy",
+      "general counsel",
+      "chief",
+      "vice president"
+    ],
     "language_keywords": [
       "Korean",
       "English",

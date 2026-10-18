@@ -1,13 +1,18 @@
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta
+import io
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import job_search as js
+import prepare_discovery_config as config_loader
 
 
 NOW = "2026-10-18T09:00:00+00:00"
@@ -277,6 +282,100 @@ class ProviderAndOutputTests(unittest.TestCase):
     def test_future_or_timezone_naive_evidence_not_accepted(self):
         for timestamp in ("2026-11-01T00:00:00+00:00", "2026-10-18T00:00:00"):
             self.assertIsNone(js.verified_value({"x": fact(100, timestamp)}, "x", NOW, 30))
+
+
+class RecencyTests(unittest.TestCase):
+    def test_posted_date_boundaries_and_future_unknown(self):
+        fetched = datetime.fromisoformat(NOW)
+        for age, expected in ((0, "last_3_days"), (3 * 86400, "last_3_days"), (3 * 86400 + 1, "last_7_days"),
+                              (7 * 86400, "last_7_days"), (7 * 86400 + 1, "older"), (-1, "unknown")):
+            with self.subTest(age_seconds=age):
+                posted = (fetched - timedelta(seconds=age)).isoformat()
+                self.assertEqual(js.posting_recency(posted, NOW)["recency_bucket"], expected)
+
+    def test_lever_millisecond_timestamp_and_ashby_iso_agree(self):
+        posted = datetime.fromisoformat(NOW) - timedelta(days=2)
+        millis = int(posted.timestamp() * 1000)
+        numeric = js.posting_recency(millis, NOW)
+        iso = js.posting_recency(posted.isoformat(), NOW)
+        self.assertEqual(numeric, iso)
+        self.assertEqual(numeric["recency_bucket"], "last_3_days")
+
+    def test_updated_and_first_seen_never_establish_newly_posted(self):
+        row = job_for({**posting(), "updated_at": NOW})
+        row["first_seen_at"] = NOW
+        classified = js.classify(row, config()["criteria"], {})
+        self.assertEqual(classified["recency_bucket"], "unknown")
+        for value in (None, "unknown", "2026-10-18", True, "2026-10-18T00:00:00"):
+            self.assertEqual(js.posting_recency(value, NOW)["recency_bucket"], "unknown")
+
+    def test_report_sorts_recent_then_week_then_older_then_unknown(self):
+        settings = config()
+        settings["sources"] = [{"provider": "ashby", "board": "example"}]
+        items = []
+        for identity, age in (("unknown", None), ("older", 8), ("week", 5), ("fresh", 1)):
+            item = {"id": identity, "title": "Legal Counsel", "location": "Singapore", "jobUrl": f"https://jobs.example/{identity}", "descriptionPlain": "2 years of legal experience"}
+            if age is not None:
+                item["publishedAt"] = (datetime.fromisoformat(NOW) - timedelta(days=age)).isoformat()
+            items.append(item)
+        report = js.collect(settings, lambda _: {"jobs": items}, NOW)
+        self.assertEqual([row["recency_bucket"] for row in report["jobs"]], ["last_3_days", "last_7_days", "older", "unknown"])
+
+    def test_actively_reviewing_needs_explicit_current_evidence(self):
+        item = posting(description="We are actively reviewing applications. 2 years of legal experience.")
+        self.assertEqual(classify(item=item)["actively_reviewing"], "unknown")
+        self.assertEqual(classify(verified(actively_reviewing=fact(True)), item)["actively_reviewing"], True)
+        stale = (datetime.fromisoformat(NOW) - timedelta(hours=25)).isoformat()
+        row = classify(verified(actively_reviewing=fact(True, stale)), item)
+        self.assertEqual(row["actively_reviewing"], "unknown")
+        self.assertIsNone(row["actively_reviewing_evidence"])
+
+
+class ConfigurationFallbackTests(unittest.TestCase):
+    def test_public_fallback_matches_targeted_hiring_and_legal_ops_but_not_generic_ops(self):
+        fallback = Path(__file__).resolve().parents[1] / "config/job-search.example.json"
+        loaded, _ = config_loader.load_config("", fallback)
+        for title in ("Hiring Associate", "Recruiting Coordinator", "Legal Operations Specialist", "AI Operations Associate"):
+            with self.subTest(title=title):
+                row = js.classify(job_for(posting(title=title)), loaded["criteria"], {})
+                self.assertEqual(row["status"], "needs_verification")
+        row = js.classify(job_for(posting(title="Warehouse Operations Associate")), loaded["criteria"], {})
+        self.assertEqual(row["status"], "excluded_role")
+
+    def test_no_secret_uses_public_generic_config_without_salary_threshold(self):
+        fallback = Path(__file__).resolve().parents[1] / "config/job-search.example.json"
+        loaded, mode = config_loader.load_config("", fallback)
+        self.assertEqual(mode, "public generic fallback")
+        self.assertIsNone(loaded["criteria"]["monthly_net_floor_cny"])
+        self.assertEqual(loaded["verified_facts"], {})
+
+    def test_optional_private_configuration_takes_precedence(self):
+        expected = {"sources": [], "criteria": {"monthly_net_floor_cny": 123}}
+        loaded, mode = config_loader.load_config(json.dumps(expected), Path("missing-fallback.json"))
+        self.assertEqual(loaded, expected)
+        self.assertEqual(mode, "private environment configuration")
+
+    def test_invalid_supplied_secret_fails_without_exposing_it_or_falling_back(self):
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "runtime.json"
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with patch.dict(os.environ, {"JOB_SEARCH_CONFIG_JSON": "SECRET_MARKER_INVALID_JSON"}), redirect_stdout(stdout), redirect_stderr(stderr):
+                result = config_loader.main(["--fallback", "missing.json", "--output", str(output)])
+            self.assertEqual(result, 2)
+            self.assertFalse(output.exists())
+            self.assertNotIn("SECRET_MARKER", stdout.getvalue() + stderr.getvalue())
+
+    def test_materialized_configuration_restricts_existing_file_permissions(self):
+        fallback = Path(__file__).resolve().parents[1] / "config/job-search.example.json"
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "runtime.json"
+            output.write_text("old")
+            output.chmod(0o644)
+            with patch.dict(os.environ, {"JOB_SEARCH_CONFIG_JSON": ""}), redirect_stdout(io.StringIO()):
+                result = config_loader.main(["--fallback", str(fallback), "--output", str(output)])
+            self.assertEqual(result, 0)
+            self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+            self.assertIsNone(json.loads(output.read_text())["criteria"]["monthly_net_floor_cny"])
 
 
 if __name__ == "__main__":

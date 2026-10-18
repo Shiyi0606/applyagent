@@ -1,6 +1,6 @@
 # ApplyAgent public job discovery
 
-A small Python companion for a human-reviewed application workflow. It reads public employer ATS boards, ranks legal, privacy, compliance, regulatory, policy, and AI-governance leads, and saves source evidence. It does not log in to LinkedIn, scrape account pages, contact anyone, or submit applications.
+A small Python companion for a human-reviewed application workflow. It reads public employer ATS boards, ranks legal, privacy, compliance, regulatory, policy, AI-governance, hiring coordination and legal-operations leads, and saves source evidence. It does not log in to LinkedIn, scrape account pages, contact anyone, or submit applications.
 
 Python 3.11 or newer is the only prerequisite. There are no third-party dependencies or paid APIs. Repository files contain no applicant resume, name, contact details, or private search thresholds.
 
@@ -13,7 +13,7 @@ python -m unittest discover -s tests -v
 python scripts/job_search.py --config /absolute/private/path/job-search.json --output output --state .job-search-state/seen.json
 ```
 
-The example leaves compensation thresholds unset. Unset required thresholds prevent any role from becoming `ready_for_review`. It includes Anthropic/Greenhouse and OpenAI/Ashby board identifiers as starting examples, not an assertion that a vacancy is currently available or that these endpoints are reachable from your environment. Confirm board identifiers by following each employer's official careers page. Replace or extend the sources as needed, including NGOs that use a supported provider. Boards hosted on other systems need a separate supported adapter or manual review; this does not search every company or NGO worldwide.
+The example is also the public generic daily fallback. It leaves compensation thresholds unset and contains no applicant facts; unset required thresholds prevent any role from becoming `ready_for_review`. It includes Anthropic/Greenhouse, OpenAI/Ashby, Adyen/Greenhouse and Farfetch/Lever feeds as starting examples, not an assertion that a vacancy is currently available or that these endpoints are reachable from your environment. Confirm board identifiers by following each employer's official careers page. Replace or extend the sources as needed, including NGOs that use a supported provider. Boards hosted on other systems need a separate supported adapter or manual review; this does not search every company or NGO worldwide.
 
 Supported public, unauthenticated GET endpoints:
 
@@ -51,9 +51,15 @@ Verified facts are keyed by the normalized `job_id` found in `jobs.json`. Each f
 
 Facts are human assertions, not independently authenticated by this program. Use direct employer, official compensation, tax, immigration, or recruiter evidence that actually supports the asserted fact. Do not record personal contact details, resume text, passwords, account cookies, or tokens in this configuration.
 
+## Recent postings and active review evidence
+
+Relevant leads sort first by the provider's posting timestamp: the last 72 hours (`last_3_days`), then up to 7 days (`last_7_days`), then older known postings, then unknown dates. The original timestamp and normalized UTC timestamp are retained. Lever `createdAt` milliseconds and timezone-aware Ashby `publishedAt` timestamps are supported. Greenhouse's `updated_at` is an update date, so its posting date remains unknown. A first-seen cache entry does not establish that a job was newly posted; future, malformed and timezone-ambiguous timestamps remain unknown.
+
+The adapters do not supply LinkedIn's "actively reviewing" badge or an equivalent current hiring signal. The report therefore defaults `actively_reviewing` to `unknown`. An optional per-job `verified_facts.actively_reviewing` boolean uses the same evidence-URL and timestamp schema as other facts, but expires after 24 hours. Record it only from explicit, current, verifiable evidence. A newly fetched posting, generic hiring text or an old badge cannot establish active review. Within each recency group, verified active-review leads receive priority.
+
 ## Outputs
 
-- `jobs.json`: all normalized current postings, original description text and compensation evidence, source/API URLs, fetched timestamps, deduplicated identifiers, parsed experience excerpts, verified facts, explicit unknowns, status, and first-seen state.
+- `jobs.json`: all normalized current postings, original description text and compensation evidence, source/API URLs, fetched timestamps, posting recency, active-review evidence or explicit unknown, deduplicated identifiers, parsed experience excerpts, verified facts, status, and first-seen state.
 - `jobs.csv`: spreadsheet-friendly review fields; formula-like leading text is escaped.
 - `report.md`: source health and the first 100 non-excluded review leads, with links and missing information.
 - `.job-search-state/seen.json`: posting identifiers and first/last-seen timestamps for local repeat runs. Previously seen postings remain in the registry; it is not a list of still-open vacancies.
@@ -62,17 +68,19 @@ Facts are human assertions, not independently authenticated by this program. Use
 
 ## Daily GitHub Actions schedule
 
-The included workflow is a **draft until pushed to the repository's default branch and enabled**. Nothing running in this checkout schedules a persistent task. It runs at **09:00 Asia/Shanghai (01:00 UTC)**, subject to GitHub scheduler delays, and also supports manual dispatch.
+After this workflow version is pushed to the repository's default branch with GitHub Actions enabled, daily discovery is **enabled by default**, without a secret or repository variable. It runs at **09:00 Asia/Shanghai (01:00 UTC)**, subject to GitHub scheduler delays, and also supports manual dispatch. A local checkout alone does not run a persistent task.
 
-1. Save a private search JSON object as repository Actions secret `JOB_SEARCH_CONFIG_JSON`. Keep resume/contact/account data out of it. The workflow writes it to a restricted temporary file and never logs its value.
-2. Set repository Actions variable `JOB_SEARCH_ENABLED` to the exact string `true` when ready. Missing or `false` leaves both scheduled and manually dispatched jobs gated off.
-3. Download each run's report artifact from the Actions page. Artifacts expire after 14 days. A cache carries seen-posting IDs between runs; if that cache is unavailable, newness starts again.
-4. Pause by setting `JOB_SEARCH_ENABLED` to `false`, or disable the workflow in GitHub Actions.
+Changes pushed to `main` under the workflow, scripts, configuration or tests also trigger a discovery run, allowing immediate execution checks after deployment. README-only changes do not trigger it. The generic preset includes specific hiring-associate, recruiting-coordinator, recruiting-operations, legal-operations and AI-operations title phrases; an unrelated generic operations title does not match by itself.
 
-The workflow has only `contents: read`, runs no external messaging, and uploads no private configuration. It creates no ongoing chat notifications and cannot know when a job has been accepted; pause it when the search should stop. This checkout is not published or enabled automatically.
+1. With no `JOB_SEARCH_CONFIG_JSON` secret, the workflow uses `config/job-search.example.json`: public employer feeds and generic criteria only. It loads no private resume, contact data, personal salary target or applicant qualifications. Results are discovery leads with explicit unknowns.
+2. Optionally save a private search JSON object as repository Actions secret `JOB_SEARCH_CONFIG_JSON` to replace the generic configuration. Keep resume/contact/account data out of it. A supplied invalid secret fails safely instead of silently switching settings. The workflow writes either configuration to a mode-600 temporary file, never logs values, and removes the file afterward.
+3. Download each run's report artifact from the Actions page. Artifacts expire after 14 days. A cache carries seen-posting IDs between runs; if that cache is unavailable, newness starts again. Check the actual run and source-health results before claiming execution succeeded.
+4. Pause by setting repository Actions variable `JOB_SEARCH_ENABLED` to the exact string `false`, or disable the workflow in GitHub Actions. An unset variable leaves discovery enabled. Removing the pause or setting any value other than `false` allows future runs.
+
+The workflow has only `contents: read`, runs no external messaging, and uploads no private configuration. It creates no ongoing chat notifications and cannot know when a job has been accepted; pause it when the search should stop. It produces daily discovery reports, not unattended applications. Candidate-specific document tailoring, account access, declarations, uploads and actual submissions require a separately authorized interactive workflow.
 
 ## LinkedIn and application preparation
 
 Use LinkedIn's own public search and saved-job features manually alongside official employer sources. Example public navigation links are [legal counsel](https://www.linkedin.com/jobs/search/?keywords=legal%20counsel), [AI governance](https://www.linkedin.com/jobs/search/?keywords=AI%20governance), and [Korean legal](https://www.linkedin.com/jobs/search/?keywords=Korean%20legal). These links are not scraped or fetched by this workflow. Confirm every application on the employer's official site.
 
-For ApplyPilot or other application tools, prepare truthful tailored documents and verify all eligibility requirements before submission. Account access, CAPTCHAs, and application-specific declarations remain interactive; this companion has no submission integration and uses no fingerprint or CAPTCHA bypasses.
+For ApplyPilot or other application tools, prepare truthful tailored documents and follow the user's current role-specific submission authorization while recording unresolved terms. The discovery evidence labels do not themselves grant or revoke permission to apply. Account access, CAPTCHAs, and application-specific declarations remain interactive; this companion has no submission integration and uses no fingerprint or CAPTCHA bypasses.
