@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.venv/
+output/
+.job-search-state/
+*.private.json
+.env
+.env.*

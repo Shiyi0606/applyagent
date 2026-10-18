@@ -1,0 +1,67 @@
+name: Daily public job discovery
+
+on:
+  schedule:
+    - cron: '0 1 * * *' # 09:00 Asia/Shanghai; GitHub scheduling can be delayed.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-job-discovery
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    if: ${{ vars.JOB_SEARCH_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate implementation
+        run: python -m unittest discover -s tests -v
+      - name: Load private search configuration
+        env:
+          JOB_SEARCH_CONFIG_JSON: ${{ secrets.JOB_SEARCH_CONFIG_JSON }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          raw = os.environ.get('JOB_SEARCH_CONFIG_JSON', '')
+          if not raw:
+              raise SystemExit('Set the JOB_SEARCH_CONFIG_JSON repository secret before enabling discovery.')
+          try:
+              config = json.loads(raw)
+          except ValueError:
+              raise SystemExit('JOB_SEARCH_CONFIG_JSON must contain valid JSON; its value was not logged.')
+          target = Path(os.environ['RUNNER_TEMP']) / 'job-search.private.json'
+          descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+          with os.fdopen(descriptor, 'w') as handle:
+              json.dump(config, handle)
+          PY
+      - name: Restore previously seen posting identifiers
+        uses: actions/cache@v4
+        with:
+          path: .job-search-state
+          key: job-search-state-${{ github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            job-search-state-${{ github.ref_name }}-
+      - name: Discover current public postings
+        run: python scripts/job_search.py --config "$RUNNER_TEMP/job-search.private.json" --output output --state .job-search-state/seen.json
+      - name: Attach reports, including source failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-job-discovery-${{ github.run_id }}
+          path: output/
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Remove temporary search configuration
+        if: always()
+        run: rm -f "$RUNNER_TEMP/job-search.private.json"

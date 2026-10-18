@@ -1,0 +1,23 @@
+{
+  "sources": [
+    {"provider": "greenhouse", "board": "anthropic", "company": "Anthropic", "enabled": true},
+    {"provider": "ashby", "board": "openai", "company": "OpenAI", "enabled": true},
+    {"provider": "lever", "board": "YOUR_CONFIRMED_EMPLOYER_BOARD", "company": "Confirm against employer careers website", "enabled": false}
+  ],
+  "criteria": {
+    "role_keywords": ["legal", "counsel", "lawyer", "attorney", "privacy", "compliance", "regulatory", "governance", "policy"],
+    "exclude_title_keywords": [],
+    "language_keywords": ["Korean", "English", "Mandarin", "Chinese", "bilingual", "multilingual", "한국어", "영어", "韩语", "英语"],
+    "require_language_match": false,
+    "preferred_locations": [],
+    "maximum_required_experience_years": 4,
+    "over_experience_limit": "reject",
+    "monthly_net_floor_cny": null,
+    "bonus_is_requirement": false,
+    "guaranteed_bonus_months_floor": null,
+    "bonus_must_exceed_floor": true,
+    "require_work_permit_outside_mainland_china": true,
+    "verified_evidence_max_age_days": 30
+  },
+  "verified_facts": {}
+}
